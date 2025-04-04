@@ -55,7 +55,7 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         loss_CL = loss_model.weighted_BCE_loss(pred, label, inc_L_ind)
         # 这里的输入是：补全之后的多视图特征，形状是(6,128,512),label (128, 20)
         loss_GC = loss_model.label_guided_graph_loss(complete_z, label, inc_V_ind, inc_L_ind)
-
+        ## 剩下的loss还没有引入train中，但是都已实现完
         loss = loss_CL + loss_GC + loss_vae_s + loss_vae_p
         opt.zero_grad()
         loss.backward()

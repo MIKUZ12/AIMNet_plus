@@ -301,14 +301,14 @@ class VAE(nn.Module):
         
         # 聚合计算
         aggregate_T = torch.sum(exist_T, dim=0)
-        aggregate_var = 1. / (aggregate_T + eps)
+        aggregate_sca = 1. / (aggregate_T + eps)
         aggregate_mu = torch.sum(exist_mu * exist_T, dim=0) / (aggregate_T + eps)
         
         # 最终检查
         if torch.isnan(aggregate_mu).any():
             print('警告: 融合均值中存在NaN')
         
-        return aggregate_mu, aggregate_var
+        return aggregate_mu, aggregate_sca
 
     def moe_aggregate(self, mu, var, mask=None, eps=1e-5):
         if mask is None:

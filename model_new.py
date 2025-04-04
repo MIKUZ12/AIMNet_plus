@@ -229,7 +229,7 @@ class Net(nn.Module):
         p = p.mul(mask_confi.unsqueeze(dim=-1)) # 乘以权重
         p = p.sum(dim = 1) # 跨视图聚合
         p = torch.sigmoid(p) # 转换为概率
-        # 这里是vae模块得到的预测
+        # 这里是vae模块得到的预测即伪标签
         p_vae_s_list = []
         p_vae_p_list = []
         for v in range(len(z_sample_list_s)):
@@ -243,25 +243,26 @@ class Net(nn.Module):
             p_vae_p_list.append(p_vae_p)
         # 至此得到了每个视图的共享和私有的预测伪标签
         # 我们需要根据这个伪标签和其共享和私有的特征计算流形损失
-        loss = Loss()
+        loss_mani = Loss()
+        # 这里是针对每个视图的共享和私有的表征（z）及其伪标签去计算流形损失以得到融合系数
         loss_manifold_s = []
         loss_manifold_p = []
         for v in range(len(p_vae_s_list)):
-            loss_manifold_s.append(loss.label_guided_graph_single_loss(z_sample_list_s[v], p_vae_s_list[v], mask, inc_L_ind))
-            loss_manifold_p.append(loss.label_guided_graph_single_loss(z_sample_list_p[v], p_vae_p_list[v], mask, inc_L_ind))
+            loss_manifold_s.append(loss_mani.label_guided_graph_single_loss(z_sample_list_s[v], p_vae_s_list[v], mask, inc_L_ind))
+            loss_manifold_p.append(loss_mani.label_guided_graph_single_loss(z_sample_list_p[v], p_vae_p_list[v], mask, inc_L_ind))
 
         ## 至此，计算出了每个视图的流形损失，接下来需要利用这个流形损失对每个视图的共享和私有特征进行融合
         loss_manifold_s = torch.tensor(loss_manifold_s)
         loss_manifold_p = torch.tensor(loss_manifold_p)
-        # 损失值越小，权重越大（使用负指数变换）
+        # 损失值越小，权重越大,直接使用倒数
         weights_s = 1.0 / (loss_manifold_s + 1e-10)  # 添加小常数避免除零
         weights_p = 1.0 / (loss_manifold_p + 1e-10)
         # 归一化权重，使其和为1
         weights_s = weights_s / (weights_s.sum() + 1e-10)
         weights_p = weights_p / (weights_p.sum() + 1e-10)
         # 将共享和私有的潜在变量进行融合
-        aggregate_mu_s, aggregate_var_s = self.VAE.weighted_poe_aggregate(mu_s_list, sca_s_list, weights_s)
-        aggregate_mu_p, aggregate_var_p = self.VAE.weighted_poe_aggregate(mu_p_list, sca_p_list, weights_p)
+        aggregate_mu_s, aggregate_sca_s = self.VAE.weighted_poe_aggregate(mu_s_list, sca_s_list, weights_s)
+        aggregate_mu_p, aggregate_sca_p = self.VAE.weighted_poe_aggregate(mu_p_list, sca_p_list, weights_p)
 
         return p, label_embedding, p_pre, x_new, uniview_mu_list, uniview_sca_list,  label_embedding_sample,p, label_embedding_vae, label_embedding_var, None, xr_s_list, xr_p_list, pos_beat_I, p_vae_s_list, p_vae_p_list, I_mutual_s
         
