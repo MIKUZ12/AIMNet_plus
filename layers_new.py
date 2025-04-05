@@ -277,13 +277,13 @@ class FDModel(nn.Module):
         # 结合标签嵌入特征（做一个线性映射）
         # 此处是对应公式8，对嵌入好的标签特征先经过一个线性层然后做sigmoid
         y_n = self.NN2(y).sigmoid_()  # b2 x h
-        Z = []
-        # 求出来交互特征（对应公式8）
-        for i in range(new_x.shape[0]):
-            z_i = new_x[i].unsqueeze(1) * y_n.unsqueeze(0)
-            Z.append(z_i)
+        # Z = []
+        # # 求出来交互特征（对应公式8）
+        # for i in range(new_x.shape[0]):
+        #     z_i = new_x[i].unsqueeze(1) * y_n.unsqueeze(0)
+        #     Z.append(z_i)
         x_new_processed = []
         for i in range(len(x)):
             x_new_i = self.MLP_list2[i](new_x[i])
             x_new_processed.append(x_new_i)
-        return Z, torch.clamp(confi, min=0., max=1.), new_x, x_new_processed
+        return torch.clamp(confi, min=0., max=1.), new_x, x_new_processed, y_n

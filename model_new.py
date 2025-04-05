@@ -200,7 +200,7 @@ class Net(nn.Module):
         label_embedding_vae  =  self.label_embedding_u
         # 对应论文Attention-Induced Missing View Imputation的部分
         ## 返回值Z对应论文中的公式8返回值：B_i，confi对应公式9得到的最大池化置信度Q
-        Z ,confi, x_new, x_new_processed = self.FD_model(input, label_embedding, mask)  #Z[i]=[128, 260, 512] b c d_e
+        confi, x_new, x_new_processed, y_n = self.FD_model(input, label_embedding, mask)  #Z[i]=[128, 260, 512] b c d_e
         # 将标签的vae嵌入label_embedding_u（初始化为一个大小为num_classes*num_classes的对角矩阵）输入进变分推断的encoder，得到高斯分布的均值和幅度sca
         label_embedding, label_embedding_var = self.label_mlp(self.label_embedding_u)
         label_embedding_sample = gaussian_reparameterization_var(label_embedding,label_embedding_var,5)
@@ -213,21 +213,22 @@ class Net(nn.Module):
         mu_p_list = torch.stack(mu_p_list,dim=0)
         sca_s_list = torch.stack(sca_s_list,dim=0)
         sca_p_list = torch.stack(sca_p_list,dim=0)
-        p_list = []
-        for z_i in Z:
-            p_ii = self.cls_conv(z_i).squeeze(2)
-            p_list.append(p_ii)
-        p_pre = p_list
-        p=torch.stack(p_list,dim=1)        # b*m*c
+        # p_list = []
+
+        # for z_i in Z:
+        #     p_ii = self.cls_conv(z_i).squeeze(2)
+        #     p_list.append(p_ii)
+        # p_pre = p_list
+        # p=torch.stack(p_list,dim=1)        # b*m*c
 
         # （对应公式10）计算加权的mask
         # 计算加权掩码，并已经进行过了归一化处理
-        mask_confi = (1-mask).mul(confi.t())+mask # b m
-        mask_confi = mask_confi/(mask_confi.sum(dim=1,keepdim=True)+1e-9)   # b*m
-        # 应用权重（对应公式11），用置信度对输出分类进行加权，根据视图缺失情况和邻居相关性动态调整置信度，提升鲁棒性
-        p = p.mul(mask_confi.unsqueeze(dim=-1)) # 乘以权重
-        p = p.sum(dim = 1) # 跨视图聚合
-        p = torch.sigmoid(p) # 转换为概率
+        # mask_confi = (1-mask).mul(confi.t())+mask # b m
+        # mask_confi = mask_confi/(mask_confi.sum(dim=1,keepdim=True)+1e-9)   # b*m
+        # # 应用权重（对应公式11），用置信度对输出分类进行加权，根据视图缺失情况和邻居相关性动态调整置信度，提升鲁棒性
+        # p = p.mul(mask_confi.unsqueeze(dim=-1)) # 乘以权重
+        # p = p.sum(dim = 1) # 跨视图聚合
+        # p = torch.sigmoid(p) # 转换为概率
         # 这里是vae模块得到的预测即伪标签
         p_vae_s_list = []
         p_vae_p_list = []
@@ -266,9 +267,10 @@ class Net(nn.Module):
         fusion_p = gaussian_reparameterization_var(aggregate_mu_p, aggregate_sca_p, 5)
         fusion_fea = fusion_s * fusion_p.sigmoid()
 
-
-        
-        return p, label_embedding, p_pre, x_new, uniview_mu_list, uniview_sca_list,  label_embedding_sample,p, label_embedding_vae, label_embedding_var, None, xr_s_list, xr_p_list, pos_beat_I, p_vae_s_list, p_vae_p_list, I_mutual_s, fusion_fea
+        Z = fusion_fea.unsqueeze(1) * y_n.unsqueeze(0)
+        pred = self.cls_conv(Z)
+        pred = pred.sigmoid().squeeze(2)
+        return pred, label_embedding, x_new, uniview_mu_list, uniview_sca_list,  label_embedding_sample, label_embedding_vae, label_embedding_var, None, xr_s_list, xr_p_list, pos_beat_I, p_vae_s_list, p_vae_p_list, I_mutual_s, fusion_fea
         
 
 def get_model(d_list,num_classes,beta,in_layers,class_emb,adj,rand_seed=0):

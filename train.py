@@ -41,8 +41,8 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         # print(label.shape,label.sum())
         L_all = []
         # pred, label_embedding,  p_pre = model(data,mask=torch.ones_like(inc_V_ind))
-        (pred, label_embedding, p_pre, complete_z, uniview_mu_list, uniview_sca_list, 
-         label_embedding_sample, p, label_embedding_vae, 
+        (pred, label_embedding, complete_z, uniview_mu_list, uniview_sca_list, 
+         label_embedding_sample,  label_embedding_vae, 
         label_embedding_var, _, xr_s_list, xr_p_list, pos_beat_I, 
         p_vae_s_list, p_vae_p_list, I_mutual_s, fusion_fea) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
 
@@ -54,9 +54,8 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         # 使用weighted_BCE_loss + label_guided_graph_loss作为损失，使用加权的多label分类loss，输入的值有label的掩码
         loss_CL = loss_model.weighted_BCE_loss(pred, label, inc_L_ind)
         # 这里的输入是：补全之后的多视图特征，形状是(6,128,512),label (128, 20)
-        loss_GC = loss_model.label_guided_graph_loss(complete_z, label, inc_V_ind, inc_L_ind)
         ## 剩下的loss还没有引入train中，但是都已实现完
-        loss = loss_CL + loss_GC + loss_vae_s + loss_vae_p - I_mutual_s + pos_beat_I
+        loss = loss_CL  + loss_vae_s + loss_vae_p - I_mutual_s + pos_beat_I
         opt.zero_grad()
         loss.backward()
         if isinstance(sche, CosineAnnealingWarmRestarts):
@@ -88,8 +87,8 @@ def test(loader, model, loss_model, epoch, logger):
         # data_time.update(time.time() - end)
         data = [v_data.to('cuda:0') for v_data in data]
         # pred,_,_ = model(data,mask=torch.ones_like(inc_V_ind).to('cuda:0'))
-        (pred, label_embedding, p_pre, complete_z, uniview_mu_list, uniview_sca_list, 
-         label_embedding_sample, p, label_embedding_vae, 
+        (pred, label_embedding, complete_z, uniview_mu_list, uniview_sca_list, 
+         label_embedding_sample, label_embedding_vae, 
         label_embedding_var, _, xr_s_list, xr_p_list, pos_beat_I, 
         p_vae_s_list, p_vae_p_list, I_mutual_s, _) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
         pred = pred.cpu()
