@@ -213,7 +213,7 @@ class FDModel(nn.Module):
         self.MLP_list = nn.ModuleList([MLP(dim_pre_view, hidden_features, hidden_list,
                                            batchNorm, nonlinearity, negative_slope) for dim_pre_view in d_list])
         ## MLP的模型表，输入是hidden_features，输出是out_features
-        self.MLP_list2 = nn.ModuleList([MLP(hidden_features, out_features, hidden_list,
+        self.MLP_list2 = nn.ModuleList([MLP(hidden_features, dim_pre_view, hidden_list,
                                             batchNorm, nonlinearity, negative_slope) for dim_pre_view in d_list])
         # in_features = class_emb
         self.NN2 = nn.Linear(in_features_y, hidden_features)
@@ -273,6 +273,7 @@ class FDModel(nn.Module):
         # 对原始的输入x中缺失view特征的部分进行动态补全（对应公式7）
         new_x = new_x * (1 - mask.transpose(0, 1).unsqueeze(dim=-1)) * 1 + x_processed * mask.transpose(0, 1).unsqueeze(
             dim=-1)
+        
         # 结合标签嵌入特征（做一个线性映射）
         # 此处是对应公式8，对嵌入好的标签特征先经过一个线性层然后做sigmoid
         y_n = self.NN2(y).sigmoid_()  # b2 x h
@@ -281,4 +282,8 @@ class FDModel(nn.Module):
         for i in range(new_x.shape[0]):
             z_i = new_x[i].unsqueeze(1) * y_n.unsqueeze(0)
             Z.append(z_i)
-        return Z, torch.clamp(confi, min=0., max=1.), new_x
+        x_new_processed = []
+        for i in range(len(x)):
+            x_new_i = self.MLP_list2[i](new_x[i])
+            x_new_processed.append(x_new_i)
+        return Z, torch.clamp(confi, min=0., max=1.), new_x, x_new_processed

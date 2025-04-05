@@ -44,7 +44,7 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         (pred, label_embedding, p_pre, complete_z, uniview_mu_list, uniview_sca_list, 
          label_embedding_sample, p, label_embedding_vae, 
         label_embedding_var, _, xr_s_list, xr_p_list, pos_beat_I, 
-        p_vae_s_list, p_vae_p_list, I_mutual_s) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
+        p_vae_s_list, p_vae_p_list, I_mutual_s, fusion_fea) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
 
         loss_vae_s = 0
         loss_vae_p = 0
@@ -56,7 +56,7 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         # 这里的输入是：补全之后的多视图特征，形状是(6,128,512),label (128, 20)
         loss_GC = loss_model.label_guided_graph_loss(complete_z, label, inc_V_ind, inc_L_ind)
         ## 剩下的loss还没有引入train中，但是都已实现完
-        loss = loss_CL + loss_GC + loss_vae_s + loss_vae_p
+        loss = loss_CL + loss_GC + loss_vae_s + loss_vae_p - I_mutual_s + pos_beat_I
         opt.zero_grad()
         loss.backward()
         if isinstance(sche, CosineAnnealingWarmRestarts):
@@ -91,7 +91,7 @@ def test(loader, model, loss_model, epoch, logger):
         (pred, label_embedding, p_pre, complete_z, uniview_mu_list, uniview_sca_list, 
          label_embedding_sample, p, label_embedding_vae, 
         label_embedding_var, _, xr_s_list, xr_p_list, pos_beat_I, 
-        p_vae_s_list, p_vae_p_list, I_mutual_s) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
+        p_vae_s_list, p_vae_p_list, I_mutual_s, _) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
         pred = pred.cpu()
         total_labels = np.concatenate((total_labels, label.numpy()), axis=0) if len(total_labels) > 0 else label.numpy()
         total_preds = np.concatenate((total_preds, pred.detach().numpy()), axis=0) if len(

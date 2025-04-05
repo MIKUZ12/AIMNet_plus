@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from layers_new import  FDModel, MLP,GAT
 from model_VAE_new import VAE
 from myloss import Loss
-
+from model_VAE_new import gaussian_reparameterization_var
 
 def gaussian_reparameterization_std(means, std, times=1):
     std = std.abs()
@@ -199,15 +199,14 @@ class Net(nn.Module):
         # 此处是vae的标签嵌入
         label_embedding_vae  =  self.label_embedding_u
         # 对应论文Attention-Induced Missing View Imputation的部分
-        ## 返回值Z对应论文中的公式8返回值：Bi，confi对应公式9得到的最大池化置信度Q
-        Z ,confi, x_new = self.FD_model(input, label_embedding, mask)  #Z[i]=[128, 260, 512] b c d_e
-
+        ## 返回值Z对应论文中的公式8返回值：B_i，confi对应公式9得到的最大池化置信度Q
+        Z ,confi, x_new, x_new_processed = self.FD_model(input, label_embedding, mask)  #Z[i]=[128, 260, 512] b c d_e
         # 将标签的vae嵌入label_embedding_u（初始化为一个大小为num_classes*num_classes的对角矩阵）输入进变分推断的encoder，得到高斯分布的均值和幅度sca
         label_embedding, label_embedding_var = self.label_mlp(self.label_embedding_u)
         label_embedding_sample = gaussian_reparameterization_var(label_embedding,label_embedding_var,5)
         assert torch.sum(torch.isnan(label_embedding_sample)).item() == 0
         assert torch.sum(torch.isinf(label_embedding_sample)).item() == 0
-        uniview_mu_list, uniview_sca_list, xr_s_list, xr_p_list, pos_beat_I, I_mutual_s,z_sample_list_s, z_sample_list_p, mu_s_list, mu_p_list, sca_s_list, sca_p_list = self.VAE(input,mask)
+        uniview_mu_list, uniview_sca_list, xr_s_list, xr_p_list, pos_beat_I, I_mutual_s,z_sample_list_s, z_sample_list_p, mu_s_list, mu_p_list, sca_s_list, sca_p_list = self.VAE(x_new_processed,mask)
         # 这一步得到的p_pre对应论文中的（公式8）下面的P(v)部分，得到的是经过线性分类层的初次logits
         # 将mu_s_list, mu_p_list, sca_s_list, sca_p_list 转换为tensor,这些是共享和私有的潜在变量
         mu_s_list = torch.stack(mu_s_list,dim=0)
@@ -263,8 +262,13 @@ class Net(nn.Module):
         # 将共享和私有的潜在变量进行融合
         aggregate_mu_s, aggregate_sca_s = self.VAE.weighted_poe_aggregate(mu_s_list, sca_s_list, weights_s)
         aggregate_mu_p, aggregate_sca_p = self.VAE.weighted_poe_aggregate(mu_p_list, sca_p_list, weights_p)
+        fusion_s = gaussian_reparameterization_var(aggregate_mu_s, aggregate_sca_s, 5)
+        fusion_p = gaussian_reparameterization_var(aggregate_mu_p, aggregate_sca_p, 5)
+        fusion_fea = fusion_s * fusion_p.sigmoid()
 
-        return p, label_embedding, p_pre, x_new, uniview_mu_list, uniview_sca_list,  label_embedding_sample,p, label_embedding_vae, label_embedding_var, None, xr_s_list, xr_p_list, pos_beat_I, p_vae_s_list, p_vae_p_list, I_mutual_s
+
+        
+        return p, label_embedding, p_pre, x_new, uniview_mu_list, uniview_sca_list,  label_embedding_sample,p, label_embedding_vae, label_embedding_var, None, xr_s_list, xr_p_list, pos_beat_I, p_vae_s_list, p_vae_p_list, I_mutual_s, fusion_fea
         
 
 def get_model(d_list,num_classes,beta,in_layers,class_emb,adj,rand_seed=0):
