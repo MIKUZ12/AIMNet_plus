@@ -6,12 +6,131 @@ import torch.nn.functional as F
 from torch.nn.functional import softplus
 
 def gaussian_reparameterization_var(means, var, times=1):
+    # 检查并处理输入
+    if torch.isnan(means).any():
+        print("警告: means中包含NaN")
+        means = torch.nan_to_num(means, nan=0.0)
+    
+    if torch.isnan(var).any():
+        print("警告: var中包含NaN")
+        var = torch.nan_to_num(var, nan=1e-6)
+    
+    # 确保方差为正值
+    var = torch.clamp(var, min=1e-6)
+    
+    # 计算标准差
     std = torch.sqrt(var)
+    
+    # 重参数化技巧
     res = torch.zeros_like(means).to(means.device)
     for t in range(times):
         epi = std.data.new(std.size()).normal_()
         res += epi * std + means
+    
+    # 最终检查
+    if torch.isnan(res).any():
+        print("警告: 重参数化结果中包含NaN")
+        res = torch.nan_to_num(res, nan=0.0)
+    
     return res/times
+
+def manual_gaussian_log_prob_stable(x, mu, var, eps=1e-8):
+    """更稳定的手动高斯分布对数概率计算
+    
+    Args:
+        x: 样本点 [batch_size, dim]
+        mu: 均值 [batch_size, dim]
+        var: 方差 [batch_size, dim]
+        eps: 数值稳定性常数
+    Returns:
+        log_prob: 对数概率 [batch_size]
+    """
+    # 检查和处理输入以避免NaN
+    if torch.isnan(x).any():
+        print("警告: x中包含NaN")
+        x = torch.nan_to_num(x, nan=0.0)
+    
+    if torch.isnan(mu).any():
+        print("警告: mu中包含NaN")
+        mu = torch.nan_to_num(mu, nan=0.0)
+    
+    if torch.isnan(var).any():
+        print("警告: var中包含NaN")
+        var = torch.nan_to_num(var, nan=eps)
+    
+    # 确保方差为正值
+    var = torch.clamp(var, min=eps)
+    
+    # 计算常数项 -0.5 * log(2π)
+    const = -0.5 * np.log(2 * np.pi)
+    
+    # 计算 -0.5 * log(σ²)，添加数值稳定性
+    log_det = -0.5 * torch.log(var + eps)
+    
+    # 计算 -0.5 * (x - μ)²/σ²，使用更稳定的计算方式
+    diff = x - mu
+    # 限制diff的大小，防止极端值
+    diff = torch.clamp(diff, min=-1e6, max=1e6)
+    # 避免除以接近0的数
+    scaled_diff = diff / torch.sqrt(var + eps)
+    mahalanobis = -0.5 * scaled_diff.pow(2)
+    
+    # 每个维度的对数概率
+    log_prob_per_dim = const + log_det + mahalanobis
+    
+    # 检查是否有无穷值或NaN
+    if torch.isnan(log_prob_per_dim).any() or torch.isinf(log_prob_per_dim).any():
+        print("警告: 对数概率计算中出现NaN或Inf")
+        log_prob_per_dim = torch.nan_to_num(log_prob_per_dim, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    # 在求和前检查数值范围，避免极端值
+    log_prob_per_dim = torch.clamp(log_prob_per_dim, min=-100, max=100)
+    
+    # 独立多维高斯分布的对数概率是各维度对数概率之和
+    log_prob = torch.sum(log_prob_per_dim, dim=-1)
+    
+    # 最终检查
+    if torch.isnan(log_prob).any():
+        print("警告: 最终结果中包含NaN")
+        log_prob = torch.zeros_like(log_prob)
+    
+    return log_prob
+
+def manual_multivariate_gaussian_log_prob(x, mu, cov, eps=1e-6):
+    """手动计算多元高斯分布的对数概率
+    Args:
+        x: 样本点 [batch_size, dim]
+        mu: 均值 [batch_size, dim]
+        cov: 协方差矩阵 [batch_size, dim, dim] 或对角线方差 [batch_size, dim]
+        eps: 数值稳定性常数
+    Returns:
+        log_prob: 对数概率 [batch_size]
+    """
+    batch_size, dim = x.shape
+    
+    # 如果cov是对角线方差，转换为对角矩阵
+    if cov.dim() == 2:
+        cov = torch.diag_embed(torch.clamp(cov, min=eps))
+    
+    # 计算常数项 -0.5 * dim * log(2π)
+    const = -0.5 * dim * torch.log(torch.tensor(2 * np.pi))
+    
+    # 计算行列式的对数 -0.5 * log(det(Σ))
+    # 对于对角矩阵，行列式就是对角线元素的乘积
+    log_det = -0.5 * torch.log(torch.diagonal(cov, dim1=-2, dim2=-1).prod(dim=-1) + eps)
+    
+    # 计算马氏距离 -0.5 * (x - μ)ᵀ Σ⁻¹ (x - μ)
+    # 对于对角矩阵，逆矩阵就是对角线元素的倒数
+    diff = x - mu
+    inv_cov = torch.inverse(cov + eps * torch.eye(dim, device=cov.device).unsqueeze(0))
+    mahalanobis = -0.5 * torch.bmm(
+        torch.bmm(diff.unsqueeze(1), inv_cov),
+        diff.unsqueeze(-1)
+    ).squeeze()
+    
+    log_prob = const + log_det + mahalanobis
+    return log_prob
+
 def fill_with_label(label_embedding,label,x_embedding,inc_V_ind):
     fea = label.matmul(label_embedding)/(label.sum(dim=1,keepdim=True)+1e-8)
     new_x =  x_embedding*inc_V_ind.T.unsqueeze(-1) + fea.unsqueeze(0)*(1-inc_V_ind.T.unsqueeze(-1))
@@ -73,13 +192,16 @@ class MIEstimator(nn.Module):
             nn.Linear(1024, 1024),
             nn.ReLU(True),
             nn.Linear(1024, 1),
+            nn.Tanh(),
         )
 
     # Gradient for JSD mutual information estimation and EB-based estimation
     def forward(self, x1, x2):
         pos = self.net(torch.cat([x1, x2], 1))  # Positive Samples
-        neg = self.net(torch.cat([torch.roll(x1, 1, 0), x2], 1))
-        return -softplus(-pos).mean() - softplus(neg).mean(), pos.mean() - neg.exp().mean() + 1
+        neg_idx = torch.randperm(x1.size(0))
+        neg = self.net(torch.cat([x1[neg_idx], x2], 1))
+        # neg = self.net(torch.cat([torch.roll(x1, 1, 0), x2], 1))
+        return -softplus(-pos).mean() - softplus(neg).mean()
 
 class sharedQz_inference_mlp(nn.Module):
     def __init__(self, in_dim, out_dim,hidden_dim=[1024]):
@@ -92,8 +214,11 @@ class sharedQz_inference_mlp(nn.Module):
     def forward(self, x):
         hidden_features = self.mlp(x)
         z_mu = self.z_loc(hidden_features)
-        z_sca = self.z_sca(hidden_features)
-        # class_feature  = self.z
+        z_sca_raw = self.z_sca(hidden_features)
+        
+        # 额外的安全检查
+        z_sca = torch.clamp(z_sca_raw, min=1e-6)
+        
         return z_mu, z_sca
     
 class inference_mlp(nn.Module):
@@ -150,7 +275,7 @@ class VAE(nn.Module):
             self.x_generation_p.append(Px_generation_mlp(self.z_dim,self.x_dim_list[v]))
         self.px_generation_s = nn.ModuleList(self.x_generation_s)
         self.px_generation_p = nn.ModuleList(self.x_generation_p)
-        self.px_generation = nn.ModuleList([Px_generation_mlp(self.z_dim, self.x_dim_list[v]) for v in range(self.num_views)])
+
 
         self.mi_estimator = []
         for v in range(self.num_views):
@@ -164,59 +289,66 @@ class VAE(nn.Module):
         uniview_sca_s_list = []
         uniview_mu_p_list = []
         uniview_sca_p_list = []
+        
         for v in range(self.num_views):
-            if torch.sum(torch.isnan(x_list[v])).item() > 0:
-                print("zzz:nan")
-                pass
-            # 每一个view都通过qz_inference提取特征
+            # 正确检查0值
+            zeros_mask = (x_list[v] == 0)
+            zero_count = zeros_mask.sum().item()
+            total_elements = x_list[v].numel()
+            
+            if zero_count > 0:
+                print(f"视图 {v} 中有 {zero_count} 个零值 (占比 {zero_count/total_elements*100:.2f}%)")
+                
+                # 选项1: 为所有0值添加小噪声
+                noise = torch.randn_like(x_list[v]) * 1e-4
+                # 只有在0值的位置添加噪声
+                x_list[v] = torch.where(zeros_mask, noise, x_list[v])
+                
+                # 选项2: 用小的非零值替换所有0值
+                # small_value = 1e-6
+                # x_list[v] = torch.where(zeros_mask, torch.ones_like(x_list[v]) * small_value, x_list[v])
+            
+            # 检查输入是否有NaN
+            if torch.isnan(x_list[v]).any():
+                print(f"视图 {v} 输入中包含NaN")
+                # 替换NaN为0
+                x_list[v] = torch.nan_to_num(x_list[v], nan=1e-6)
+            
+            # 以下是原有的特征提取代码
             fea = self.qz_inference[v](x_list[v])
             fea_s = self.qz_inference_s[v](x_list[v])
             fea_p = self.qz_inference_p[v](x_list[v])
-            if torch.sum(torch.isnan(fea)).item() > 0:
-                print("zz:nan")
-                pass
+            
+            # 检查中间特征是否有NaN
+            if torch.isnan(fea).any():
+                print(f"视图 {v} 特征中包含NaN")
+                fea = torch.nan_to_num(fea, nan=0.0)
+            
             # 通过共享头生成每个特征的潜在分布均值和方差
             z_mu_v, z_sca_v = self.qz_inference_header(fea)
             z_mu_v_s, z_sca_v_s = self.qz_inference_header(fea_s)
             z_mu_v_p, z_sca_v_p = self.qz_inference_header(fea_p)
-            if torch.sum(torch.isnan(z_mu_v)).item() > 0:
-                print("zzmu:nan")
-                pass
-            if torch.sum(torch.isnan(z_sca_v)).item() > 0:
-                print("zzvar:nan")
-                pass
+            
+            # 检查并处理方差
+            z_sca_v = torch.clamp(z_sca_v, min=1e-6)  # 确保方差为正值
+            z_sca_v_s = torch.clamp(z_sca_v_s, min=1e-6)
+            z_sca_v_p = torch.clamp(z_sca_v_p, min=1e-6)
+            
+            # 检查并处理均值
+            if torch.isnan(z_mu_v).any():
+                print(f"视图 {v} 均值中包含NaN")
+                z_mu_v = torch.nan_to_num(z_mu_v, nan=0.0)
+            
+            # 添加到列表
             uniview_mu_list.append(z_mu_v)
             uniview_sca_list.append(z_sca_v)
             uniview_mu_s_list.append(z_mu_v_s)
             uniview_sca_s_list.append(z_sca_v_s)
             uniview_mu_p_list.append(z_mu_v_p)
             uniview_sca_p_list.append(z_sca_v_p)
-
-
-
-
-
-        # mu = torch.stack(z_mu)
-        # sca = torch.stack(z_sca)
         
-        ###POE aggregation
-        # fusion_mu, fusion_sca = self.poe_aggregate(mu, sca, mask)
-
-        ###weighted fusion
-        # z = []
-        # for v in range(self.num_views):
-        #     z.append(gaussian_reparameterization_var(uniview_mu_list[v], uniview_sca_list[v],times=1))
-        # z = torch.stack(z,dim=1) #[n v d]
-        # z = z.mul(mask.unsqueeze(-1)).sum(1)
-        # z = z / (mask.sum(1).unsqueeze(-1)+1e-8)
         return uniview_mu_list, uniview_sca_list, uniview_mu_s_list, uniview_sca_s_list, uniview_mu_p_list, uniview_sca_p_list
     
-    def generation_x(self, z):
-        xr_dist = []
-        for v in range(self.num_views):
-            xrs_loc = self.px_generation[v](z)
-            xr_dist.append(xrs_loc)
-        return xr_dist
     
     def poe_aggregate(self, mu, var, mask=None, eps=1e-5):
         if mask is None:
@@ -367,32 +499,56 @@ class VAE(nn.Module):
             for j in range(self.num_views):
                 if i != j:  # 不计算自身与自身的互信息
                     # 使用第i个视图的共享表示和第j个视图的私有表示计算互信息
-                    mi_value, _ = self.mi_estimator[i](z_sample_list_s[i], z_sample_list_p[j])
-                    I_mutual_s += mi_value.mean()
+                    mi_value1 = self.mi_estimator[i](z_sample_list_s[i], z_sample_list_s[j])
+                    mi_value2 = self.mi_estimator[j](z_sample_list_s[j], z_sample_list_s[i])
+                    I_mutual_s += mi_value1.mean() + mi_value2.mean()
 
         pos_I_y_zxp_mean = 0
         # 这一项是对应解耦文章的最后优化问题的I(x_p,y_p) 
         # 遍历所有可能的视图对(i,j)，其中i≠j
-        for i in range(self.num_views):
-            # 为视图i创建私有分布
-            sca_p_positive_i = F.softplus(sca_p_list[i]) + 1e-6
-            p_z_yp_given_y_i = torch.distributions.Normal(loc=mu_p_list[i], scale=torch.sqrt(sca_p_positive_i))
-            p_z_yp_given_y_i = torch.distributions.Independent(p_z_yp_given_y_i, 1)
+        # for i in range(self.num_views):
+        #     # 为视图i创建私有分布
+        #     sca_p_positive_i = F.softplus(sca_p_list[i]) + 1e-6
+        #     p_z_yp_given_y_i = torch.distributions.Normal(loc=mu_p_list[i], scale=torch.sqrt(sca_p_positive_i))
+        #     p_z_yp_given_y_i = torch.distributions.Independent(p_z_yp_given_y_i, 1)
             
-            # 视图i的私有表示的对数概率
-            i_log_prob = p_z_yp_given_y_i.log_prob(z_sample_list_p[i]).mean()
+        #     # 视图i的私有表示的对数概率
+        #     i_log_prob = p_z_yp_given_y_i.log_prob(z_sample_list_p[i]).mean()
             
-            for j in range(self.num_views):
-                if i != j:  # 不计算自身与自身的互信息
-                    # 计算视图j的先验对数概率
-                    j_prior_log_prob = self.prior2.log_prob(z_sample_list_p[j]).mean()
+        #     for j in range(self.num_views):
+        #         if i != j:  # 不计算自身与自身的互信息
+        #             # 计算视图j的先验对数概率
+        #             j_prior_log_prob = self.prior2.log_prob(z_sample_list_p[j]).mean()
                     
-                    # 计算视图i的私有表示与视图j的先验之间的互信息
-                    pos_I_y_zxp = i_log_prob - j_prior_log_prob
-                    pos_I_y_zxp_mean += pos_I_y_zxp
-
+        #             # 计算视图i的私有表示与视图j的先验之间的互信息
+        #             pos_I_y_zxp = i_log_prob - j_prior_log_prob
+        #             pos_I_y_zxp_mean += pos_I_y_zxp
+        # 遍历所有可能的视图对(i,j)，其中i≠j
+        # for i in range(self.num_views):
+        #     # 为视图i创建私有表示的对数概率
+        #     sca_p_positive_i = F.softplus(sca_p_list[i]) + 1e-6
+            
+        #     # 手动计算视图i的私有表示的对数概率
+        #     i_log_prob = manual_gaussian_log_prob_stable(
+        #         z_sample_list_p[i], 
+        #         mu_p_list[i], 
+        #         sca_p_positive_i
+        #     ).mean()
+            
+        #     for j in range(self.num_views):
+        #         if i != j:  # 不计算自身与自身的互信息
+        #             # 计算视图j的先验对数概率（使用标准正态分布）
+        #             j_prior_log_prob = manual_gaussian_log_prob_stable(
+        #                 z_sample_list_p[j], 
+        #                 self.mu2.expand_as(z_sample_list_p[j]), 
+        #                 self.sigma.expand_as(z_sample_list_p[j]) ** 2
+        #             ).mean()
+                    
+        #             # 计算视图i的私有表示与视图j的先验之间的互信息
+        #             pos_I_y_zxp = i_log_prob - j_prior_log_prob
+        #             pos_I_y_zxp_mean += pos_I_y_zxp
         
         # 总互信息损失
-        pos_beta_I = pos_I_y_zxp_mean
+        pos_beta_I = pos_I_y_zxp_mean 
         
         return uniview_mu_list, uniview_sca_list,  xr_s_list, xr_p_list, pos_beta_I, I_mutual_s, z_sample_list_s, z_sample_list_p, mu_s_list, mu_p_list, sca_s_list, sca_p_list

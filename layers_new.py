@@ -257,16 +257,16 @@ class FDModel(nn.Module):
             # 应用mask（对应公式5），这一步只用来推断，不需要梯度回传
             # 有的样本没有对应的view数据，因此其计算出来的x_att_score是缺失的， 此处利用mask以及最大池化，保留原有x_att_score的数据并提取全局最大的注意力值
             mask_12 = torch.matmul(mask.float().t().unsqueeze(dim=-1), mask.float().t().unsqueeze(dim=1))  # m n n
+            mask_12 = mask_12.to(x_att_score.device)
             x_att_score = x_att_score.mul(mask_12)
             x_att_score = x_att_score.max(dim=0).values
             # 计算置信度（对应公式9），采取的是最大池化之后的x_att_score
             # 置信度是用来约束or训练补全的性能的，置信度高则补全特征和相邻特征高度相关，补全结果可信
             # 各个view的预测由置信度加权，训练补全质量变高
             x_att_score = x_att_score.fill_diagonal_(0.) # 对角元素置0，在置信度计算中不考虑自连接
-            confi = (torch.log(x_att_score + 1e-9) * self.beta).unsqueeze(0).mul(mask.t().unsqueeze(1)) # 应用掩码，计算置信度就是加一个小值然后求对数，利用对数放大显著信号
-            confi = confi.max(dim=-1).values
             ## 在此已经对x_att_score做了归一化
             x_att_score = x_att_score / (x_att_score.sum(dim=-1, keepdim=True) + 1e-9)
+            mask = mask.to(x_att_score.device)
             x_att_score = x_att_score.unsqueeze(0).mul(mask.t().unsqueeze(1))  #应用了掩码计算注意力分数 m n n
         # 基于注意力机制进行聚合（对应公式6），至此已经计算出来了对于输入x，各个视图的重构特征x_att_score
         new_x = x_att_score.matmul(x_processed)
@@ -286,4 +286,5 @@ class FDModel(nn.Module):
         for i in range(len(x)):
             x_new_i = self.MLP_list2[i](new_x[i])
             x_new_processed.append(x_new_i)
-        return torch.clamp(confi, min=0., max=1.), new_x, x_new_processed, y_n
+        x_new_processed = [torch.nan_to_num(x, nan=0.0) for x in x_new_processed]
+        return  new_x, x_new_processed, y_n

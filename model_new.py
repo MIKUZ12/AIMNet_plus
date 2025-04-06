@@ -16,6 +16,9 @@ from model_VAE_new import gaussian_reparameterization_var
 
 def gaussian_reparameterization_std(means, std, times=1):
     std = std.abs()
+    means = torch.nan_to_num(means, nan=0.0)
+    var = torch.nan_to_num(var, nan=1e-6)
+    var = torch.clamp(var, min=1e-6)  # 确保方差为正
     res = torch.zeros_like(means).to(means.device)
     for t in range(times):
         epi = std.data.new(std.size()).normal_()
@@ -137,6 +140,7 @@ class Net(nn.Module):
         self.z_dim = z_dim
 
         self.GAT_encoder = GAT(num_classes, class_emb)
+        self.GAT_encoder_vae = GAT(z_dim, class_emb)
         
         # Semantic-guided feature-disentangling module
         self.FD_model = FDModel(d_list,class_emb,
@@ -185,7 +189,9 @@ class Net(nn.Module):
         nn.init.normal_(self.label_adj)
         self.FD_model.reset_parameters()
         self.cls_conv.reset_parameters()
+        self.cls_conv_vae.reset_parameters()
 
+        
     def get_config_optim(self):
         return [{'params': self.FD_model.parameters()},
                 {'params': self.cls_conv.parameters()}]
@@ -199,14 +205,17 @@ class Net(nn.Module):
         # 此处是vae的标签嵌入
         label_embedding_vae  =  self.label_embedding_u
         # 对应论文Attention-Induced Missing View Imputation的部分
-        ## 返回值Z对应论文中的公式8返回值：B_i，confi对应公式9得到的最大池化置信度Q
-        confi, x_new, x_new_processed, y_n = self.FD_model(input, label_embedding, mask)  #Z[i]=[128, 260, 512] b c d_e
+        ## 返回值Z对应论文中的公式8返回值：B_i
+        x_new, x_new_processed, y_n = self.FD_model(input, label_embedding, mask)  #Z[i]=[128, 260, 512] b c d_e
         # 将标签的vae嵌入label_embedding_u（初始化为一个大小为num_classes*num_classes的对角矩阵）输入进变分推断的encoder，得到高斯分布的均值和幅度sca
-        label_embedding, label_embedding_var = self.label_mlp(self.label_embedding_u)
-        label_embedding_sample = gaussian_reparameterization_var(label_embedding,label_embedding_var,5)
+        label_embedding_mu, label_embedding_var = self.label_mlp(label_embedding_vae)
+        label_embedding_mu = self.GAT_encoder_vae(label_embedding_mu, self.adj)
+        label_embedding_var = self.GAT_encoder_vae(label_embedding_var, self.adj)
+        label_embedding_var = torch.nn.Softplus()(label_embedding_var)
+        label_embedding_sample = gaussian_reparameterization_var(label_embedding_mu,label_embedding_var,5)
         assert torch.sum(torch.isnan(label_embedding_sample)).item() == 0
         assert torch.sum(torch.isinf(label_embedding_sample)).item() == 0
-        uniview_mu_list, uniview_sca_list, xr_s_list, xr_p_list, pos_beat_I, I_mutual_s,z_sample_list_s, z_sample_list_p, mu_s_list, mu_p_list, sca_s_list, sca_p_list = self.VAE(x_new_processed,mask)
+        uniview_mu_list, uniview_sca_list, xr_s_list, xr_p_list, pos_beat_I, I_mutual_s,z_sample_list_s, z_sample_list_p, mu_s_list, mu_p_list, sca_s_list, sca_p_list = self.VAE(x_new_processed, mask)
         # 这一步得到的p_pre对应论文中的（公式8）下面的P(v)部分，得到的是经过线性分类层的初次logits
         # 将mu_s_list, mu_p_list, sca_s_list, sca_p_list 转换为tensor,这些是共享和私有的潜在变量
         mu_s_list = torch.stack(mu_s_list,dim=0)

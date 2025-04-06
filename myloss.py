@@ -70,12 +70,14 @@ class Loss(nn.Module):
         返回:
         - loss: 标量，表示损失值
         """
+        x = torch.nan_to_num(x, nan=0.0)
         n = x.size(0)  # 样本数量
         if n == 1:
             return 0
         
         valid_labels_sum = torch.matmul(inc_L_ind.float(), inc_L_ind.float().T)  # [n, n]
-        
+        inc_labels = inc_labels.to(x.device)
+        valid_labels_sum = valid_labels_sum.to(x.device)
         # 计算标签相似度矩阵T
         labels = (torch.matmul(inc_labels, inc_labels.T) / (valid_labels_sum + 1e-9)).fill_diagonal_(0)
         
@@ -87,6 +89,7 @@ class Loss(nn.Module):
         
         # 创建掩码，排除自身与自身的比较
         mask = (inc_V_ind.sum(dim=1) > 0).float().unsqueeze(1).mul((inc_V_ind.sum(dim=1) > 0).float().unsqueeze(0))  # [n, n]
+        mask = mask.to(x.device)
         mask = mask.masked_fill(torch.eye(n, device=x.device)==1, 0.)
         
         assert torch.sum(torch.isnan(mask)).item() == 0
