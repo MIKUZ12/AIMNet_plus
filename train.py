@@ -44,10 +44,8 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         # print(label.shape,label.sum())
         L_all = []
         # pred, label_embedding,  p_pre = model(data,mask=torch.ones_like(inc_V_ind))
-        (pred, label_embedding, complete_z, uniview_mu_list, uniview_sca_list, 
-         label_embedding_sample,  label_embedding_vae, 
-        label_embedding_var, _, xr_s_list, xr_p_list, pos_beat_I, 
-        p_vae_s_list, p_vae_p_list, I_mutual_s, fusion_fea) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
+        (pred, xr_s_list, xr_p_list, pos_beat_I, 
+        p_vae_s_list, p_vae_p_list, I_mutual_s, loss_manifold_s_avg, loss_manifold_p_avg) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
         lambda_val = lambda_scheduler(epoch)
         loss_vae_s = 0
         loss_vae_p = 0
@@ -63,8 +61,7 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         # 使用weighted_BCE_loss + label_guided_graph_loss作为损失，使用加权的多label分类loss，输入的值有label的掩码
         loss_CL = loss_model.weighted_BCE_loss(pred, label, inc_L_ind)
         # 这里的输入是：补全之后的多视图特征，形状是(6,128,512),label (128, 20)
-        ## 剩下的loss还没有引入train中，但是都已实现完
-        loss = loss_CL  + loss_vae_s + loss_vae_p  + loss_recon_s + loss_recon_p + pos_beat_I + lambda_val*I_mutual_s
+        loss = loss_CL  + loss_vae_s + loss_vae_p  + loss_recon_s + loss_recon_p + pos_beat_I + lambda_val*I_mutual_s + loss_manifold_s_avg + loss_manifold_p_avg
         opt.zero_grad()
         
         loss.backward()
@@ -98,10 +95,8 @@ def test(loader, model, loss_model, epoch, logger):
         # data_time.update(time.time() - end)
         data = [v_data.to('cuda:0') for v_data in data]
         # pred,_,_ = model(data,mask=torch.ones_like(inc_V_ind).to('cuda:0'))
-        (pred, label_embedding, complete_z, uniview_mu_list, uniview_sca_list, 
-         label_embedding_sample, label_embedding_vae, 
-        label_embedding_var, _, xr_s_list, xr_p_list, pos_beat_I, 
-        p_vae_s_list, p_vae_p_list, I_mutual_s, _) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
+        (pred, xr_s_list, xr_p_list, pos_beat_I, 
+        p_vae_s_list, p_vae_p_list, I_mutual_s, loss_manifold_s_avg, loss_manifold_p_avg) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
         pred = pred.cpu()
         total_labels = np.concatenate((total_labels, label.numpy()), axis=0) if len(total_labels) > 0 else label.numpy()
         total_preds = np.concatenate((total_preds, pred.detach().numpy()), axis=0) if len(

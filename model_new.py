@@ -158,8 +158,6 @@ class Net(nn.Module):
         # Classifier
         self.cls_conv = nn.Conv1d(num_classes, num_classes,
                                   512, groups=num_classes)
-        self.cls_conv_vae = nn.Conv1d(num_classes, num_classes,
-                                  z_dim*2, groups=num_classes)
         self.cls = nn.Linear(z_dim, num_classes)
         hidden_list = [512] * (1-1)
         self.NN3 = MLP(512, 512, hidden_dim=hidden_list, 
@@ -189,7 +187,7 @@ class Net(nn.Module):
         nn.init.normal_(self.label_adj)
         self.FD_model.reset_parameters()
         self.cls_conv.reset_parameters()
-        self.cls_conv_vae.reset_parameters()
+
 
         
     def get_config_optim(self):
@@ -201,9 +199,9 @@ class Net(nn.Module):
         # 利用图注意机制计算multi-head output features
         # 对应论文Multi-label Semantic Representation Learning的部分，根据初始的标签邻接矩阵计算出一个标签的嵌入
         # 其中label_embedding features是可以学习的，注意力系数计算中的W，a都是可以学习的参数
-        label_embedding = self.GAT_encoder(self.label_embedding, self.adj)
         # 此处是vae的标签嵌入
         label_embedding_vae  =  self.label_embedding_u
+        label_embedding = self.GAT_encoder(label_embedding_vae, self.adj)
         # 对应论文Attention-Induced Missing View Imputation的部分
         ## 返回值Z对应论文中的公式8返回值：B_i
         x_new, x_new_processed, y_n = self.FD_model(input, label_embedding, mask)  #Z[i]=[128, 260, 512] b c d_e
@@ -242,10 +240,11 @@ class Net(nn.Module):
         p_vae_s_list = []
         p_vae_p_list = []
         for v in range(len(z_sample_list_s)):
-            qc_z_s = torch.cat((z_sample_list_s[v].unsqueeze(1).repeat(1,label_embedding_sample.shape[0],1),label_embedding_sample.unsqueeze(0).repeat(z_sample_list_s[v].shape[0],1,1)),dim=-1)
-            qc_z_p = torch.cat((z_sample_list_p[v].unsqueeze(1).repeat(1,label_embedding_sample.shape[0],1),label_embedding_sample.unsqueeze(0).repeat(z_sample_list_p[v].shape[0],1,1)),dim=-1)
-            p_vae_s = self.cls_conv_vae(qc_z_s).squeeze(-1)
-            p_vae_p = self.cls_conv_vae(qc_z_p).squeeze(-1)
+            # 将标签嵌入的采样和潜在变量进行拼接得到拼接的特征
+            qc_z_s = (z_sample_list_s[v].unsqueeze(1)) * (self.FD_model.NN2(label_embedding_sample).sigmoid_().unsqueeze(0))
+            qc_z_p = (z_sample_list_p[v].unsqueeze(1)) * (self.FD_model.NN2(label_embedding_sample).sigmoid_().unsqueeze(0))
+            p_vae_s = self.cls_conv(qc_z_s).squeeze(-1)
+            p_vae_p = self.cls_conv(qc_z_p).squeeze(-1)
             p_vae_s = torch.sigmoid(p_vae_s)
             p_vae_p = torch.sigmoid(p_vae_p)
             p_vae_s_list.append(p_vae_s)
@@ -257,8 +256,8 @@ class Net(nn.Module):
         loss_manifold_s = []
         loss_manifold_p = []
         for v in range(len(p_vae_s_list)):
-            loss_manifold_s.append(loss_mani.label_guided_graph_single_loss(z_sample_list_s[v], p_vae_s_list[v], mask, inc_L_ind))
-            loss_manifold_p.append(loss_mani.label_guided_graph_single_loss(z_sample_list_p[v], p_vae_p_list[v], mask, inc_L_ind))
+            loss_manifold_s.append(loss_mani.simplified_manifold_loss(z_sample_list_s[v], p_vae_s_list[v]))
+            loss_manifold_p.append(loss_mani.simplified_manifold_loss(z_sample_list_p[v], p_vae_p_list[v]))
 
         ## 至此，计算出了每个视图的流形损失，接下来需要利用这个流形损失对每个视图的共享和私有特征进行融合
         loss_manifold_s = torch.tensor(loss_manifold_s)
@@ -275,11 +274,13 @@ class Net(nn.Module):
         fusion_s = gaussian_reparameterization_var(aggregate_mu_s, aggregate_sca_s, 5)
         fusion_p = gaussian_reparameterization_var(aggregate_mu_p, aggregate_sca_p, 5)
         fusion_fea = fusion_s * fusion_p.sigmoid()
-
+        # 分别将共享s，和私有p的流形损失求和再平均
+        loss_manifold_s_avg = loss_manifold_s.mean()
+        loss_manifold_p_avg = loss_manifold_p.mean()
         Z = fusion_fea.unsqueeze(1) * y_n.unsqueeze(0)
         pred = self.cls_conv(Z)
         pred = pred.sigmoid().squeeze(2)
-        return pred, label_embedding, x_new, uniview_mu_list, uniview_sca_list,  label_embedding_sample, label_embedding_vae, label_embedding_var, None, xr_s_list, xr_p_list, pos_beat_I, p_vae_s_list, p_vae_p_list, I_mutual_s, fusion_fea
+        return pred, xr_s_list, xr_p_list, pos_beat_I, p_vae_s_list, p_vae_p_list, I_mutual_s, loss_manifold_s_avg, loss_manifold_p_avg
         
 
 def get_model(d_list,num_classes,beta,in_layers,class_emb,adj,rand_seed=0):

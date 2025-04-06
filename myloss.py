@@ -108,6 +108,75 @@ class Loss(nn.Module):
         loss = loss.sum() / (mask.sum() + 1e-9)
         return 0.5 * loss
     
+    def simplified_manifold_loss(self, x, labels):
+        """
+        计算简化版的流形损失，不需要视图掩码和标签掩码
+        
+        参数:
+        - x: 形状为(n,d)的张量，表示n个样本的d维特征
+        - labels: 形状为(n,c)的张量，表示n个样本的c维标签/伪标签
+        
+        返回:
+        - loss: 标量，表示损失值
+        """
+        # 安全处理输入，防止NaN
+        x = torch.nan_to_num(x, nan=0.0)
+        labels = torch.nan_to_num(labels, nan=0.0)
+        
+        n = x.size(0)  # 样本数量
+        if n <= 1:  # 至少需要2个样本
+            return torch.tensor(0.0, device=x.device)
+        
+        # 计算标签相似度矩阵
+        # 对标签进行归一化，确保数值稳定性
+        normalized_labels = F.normalize(labels, p=2, dim=1)
+        label_sim = torch.matmul(normalized_labels, normalized_labels.T)
+        
+        # 对角线置零，不考虑自身与自身的相似度
+        label_sim = label_sim.fill_diagonal_(0)
+        
+        # 计算特征相似度
+        x_normalized = F.normalize(x, p=2, dim=1)  # L2归一化
+        feature_sim = torch.matmul(x_normalized, x_normalized.T)  # 余弦相似度
+        
+        # 限制相似度范围，提高数值稳定性
+        feature_sim = torch.clamp(feature_sim, -1.0, 1.0)
+        
+        # 将余弦相似度转换到[0,1]区间
+        feature_sim = (1 + feature_sim) / 2
+        
+        # 对角线置零
+        feature_sim = feature_sim.fill_diagonal_(0)
+        
+        # 创建一个掩码，排除对角线元素
+        mask = 1.0 - torch.eye(n, device=x.device)
+        
+        # 计算损失：让特征相似度与标签相似度尽量匹配
+        # 使用二元交叉熵作为相似度匹配的损失函数
+        feature_sim_flat = feature_sim.view(-1)
+        label_sim_flat = label_sim.view(-1)
+        mask_flat = mask.view(-1)
+        
+        # 确保相似度在有效范围内，防止log(0)问题
+        feature_sim_flat = torch.clamp(feature_sim_flat, 1e-6, 1-1e-6)
+        
+        # 计算二元交叉熵损失
+        pos_loss = label_sim_flat * torch.log(feature_sim_flat)
+        neg_loss = (1 - label_sim_flat) * torch.log(1 - feature_sim_flat)
+        bce_loss = -(pos_loss + neg_loss)
+        
+        # 应用掩码并归一化
+        masked_loss = bce_loss * mask_flat
+        loss = masked_loss.sum() / (mask_flat.sum() + 1e-9)
+        
+        # 添加正则化项，鼓励特征多样性
+        # 这可以防止所有特征都塌缩到相同的值
+        # diversity_loss = torch.mean(torch.square(feature_sim - 0.5) * mask)
+        
+        # 返回总损失，可以调整权重
+        return loss 
+
+
     def label_guided_graph_loss(self, x, inc_labels, inc_V_ind, inc_L_ind):
         n = x.size(1)
         v = x.size(0)
