@@ -240,9 +240,9 @@ class Net(nn.Module):
         p_vae_s_list = []
         p_vae_p_list = []
         for v in range(len(z_sample_list_s)):
-            # 将标签嵌入的采样和潜在变量进行拼接得到拼接的特征
-            qc_z_s = (z_sample_list_s[v].unsqueeze(1)) * (self.FD_model.NN2(label_embedding_sample).sigmoid_().unsqueeze(0))
-            qc_z_p = (z_sample_list_p[v].unsqueeze(1)) * (self.FD_model.NN2(label_embedding_sample).sigmoid_().unsqueeze(0))
+            # 将标签嵌入的采样和潜在变量进行融合的特征
+            qc_z_s = (z_sample_list_s[v].unsqueeze(1)) * ((label_embedding_sample).sigmoid().unsqueeze(0))
+            qc_z_p = (z_sample_list_p[v].unsqueeze(1)) * ((label_embedding_sample).sigmoid().unsqueeze(0))
             p_vae_s = self.cls_conv(qc_z_s).squeeze(-1)
             p_vae_p = self.cls_conv(qc_z_p).squeeze(-1)
             p_vae_s = torch.sigmoid(p_vae_s)
@@ -273,11 +273,12 @@ class Net(nn.Module):
         aggregate_mu_p, aggregate_sca_p = self.VAE.weighted_poe_aggregate(mu_p_list, sca_p_list, weights_p)
         fusion_s = gaussian_reparameterization_var(aggregate_mu_s, aggregate_sca_s, 5)
         fusion_p = gaussian_reparameterization_var(aggregate_mu_p, aggregate_sca_p, 5)
-        fusion_fea = fusion_s * fusion_p.sigmoid()
+        fusion_p_sigmoid = fusion_p.sigmoid()  # 创建新的张量而不是修改原始张量
+        fusion_fea = fusion_s * fusion_p_sigmoid
         # 分别将共享s，和私有p的流形损失求和再平均
         loss_manifold_s_avg = loss_manifold_s.mean()
         loss_manifold_p_avg = loss_manifold_p.mean()
-        Z = fusion_fea.unsqueeze(1) * y_n.unsqueeze(0)
+        Z = fusion_fea.clone().unsqueeze(1) * y_n.clone().unsqueeze(0)
         pred = self.cls_conv(Z)
         pred = pred.sigmoid().squeeze(2)
         return pred, xr_s_list, xr_p_list, pos_beat_I, p_vae_s_list, p_vae_p_list, I_mutual_s, loss_manifold_s_avg, loss_manifold_p_avg

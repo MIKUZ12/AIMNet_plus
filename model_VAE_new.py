@@ -379,68 +379,67 @@ class VAE(nn.Module):
     
     def weighted_poe_aggregate(self, mu, var, weights=None, mask=None, eps=1e-5):
         """
-        加权POE融合
+        按照加权均值和加权方差公式进行融合，直接生成正确形状的输出
         
         参数:
-        - mu: 各视图的均值 [V, N, D]
-        - var: 各视图的方差 [V, N, D]
-        - weights: 各视图的权重 [V, N, 1] 或 [V]
+        - mu: 各视图的均值列表，每个元素形状为 [N, D]
+        - var: 各视图的方差列表，每个元素形状为 [N, D]
+        - weights: 各视图的权重，形状为 [V]
         - mask: 视图掩码 [N, V]
         - eps: 数值稳定性常数
         
         返回:
-        - aggregate_mu: 融合后的均值
-        - aggregate_var: 融合后的方差
+        - aggregate_mu: 融合后的均值，形状为 [N, D]
+        - aggregate_var: 融合后的方差，形状为 [N, D]
         """
-        if mask is None:
-            mask_matrix = torch.ones_like(mu).to(mu.device)
-        else:
-            mask_matrix = mask.transpose(0,1).unsqueeze(-1)  # [V, N, 1]
-        
-        # 添加先验
-        mask_matrix_new = torch.cat([torch.ones([1,mask_matrix.shape[1],mask_matrix.shape[2]]).to(mu.device), mask_matrix], dim=0)
-        p_z_mu = torch.zeros([1,mu.shape[1],mu.shape[2]]).to(mu.device)
-        p_z_var = torch.ones([1,mu.shape[1],mu.shape[2]]).to(mu.device)
-        mu_new = torch.cat([p_z_mu, mu], dim=0)
-        var_new = torch.cat([p_z_var, var], dim=0)
         
         # 处理权重
         if weights is None:
             # 如果没有提供权重，使用均匀权重
-            weights_new = torch.ones([mu_new.shape[0], mu_new.shape[1], 1]).to(mu.device)
-        else:
-            # 确保权重形状正确
-            if len(weights.shape) == 1:  # [V]
-                weights = weights.view(-1, 1, 1)  # [V, 1, 1]
-                weights = weights.expand(-1, mu.shape[1], 1)  # [V, N, 1]
-            
-            # 添加先验权重(通常为1)
-            prior_weight = torch.ones([1, mu.shape[1], 1])
-            weights_new = torch.cat([prior_weight, weights], dim=0).to(mu.device) # [V+1, N, 1]
+            weights = torch.ones(mu.shape[0], device=mu.device)  # [V]
         
-        # 应用掩码和权重
-        exist_mu = mu_new * mask_matrix_new
-        T = 1. / (var_new + eps)  # 精度
+        # 将权重改变形状以便进行广播
+        weights = weights.view(-1, 1, 1)  # [V, 1, 1]
+        weights = weights.expand(-1, mu.shape[1], 1)  # [V, N, 1]
+        weights = weights.to(mu.device)
+        # 计算权重总和
+        weights_sum = torch.sum(weights, dim=0) + eps  # [1, N, 1]
         
-        # 检查数值问题
-        if torch.isnan(exist_mu).any():
-            print('警告: 均值中存在NaN')
-        if torch.isinf(T).any():
-            print('警告: 精度中存在Inf')
+        # 1. 计算融合均值：μ_fused = Σ(w_i * μ_i) / Σ(w_i)
+        weighted_mu = mu * weights  # [V, N, D]
+        aggregate_mu = torch.sum(weighted_mu, dim=0) / weights_sum  # [N, D]
         
-        # 应用权重和掩码到精度
-        exist_T = T * mask_matrix_new * weights_new
+        # 2. 计算融合方差：σ²_fused = Σ(w_i * (σ²_i + μ²_i)) / Σ(w_i) - μ²_fused
+        mu_squared = mu ** 2  # [V, N, D]
+        weighted_var_plus_mu_squared = weights * (var + mu_squared)  # [V, N, D]
         
-        # 聚合计算
-        aggregate_T = torch.sum(exist_T, dim=0)
-        aggregate_sca = 1. / (aggregate_T + eps)
-        aggregate_mu = torch.sum(exist_mu * exist_T, dim=0) / (aggregate_T + eps)
+        # 累加所有视图的加权方差和均值平方
+        sum_weighted_var_plus_mu_squared = torch.sum(weighted_var_plus_mu_squared, dim=0)  # [N, D]
         
-        # 最终检查
+        # 计算归一化后的总和
+        normalized_sum = sum_weighted_var_plus_mu_squared / weights_sum.squeeze(0)  # [N, D]
+        
+        # 减去融合均值的平方
+        aggregate_var = normalized_sum - aggregate_mu ** 2  # [N, D]
+        
+        # 确保方差为正
+        aggregate_var = torch.clamp(aggregate_var, min=eps)  # [N, D]
+        
+        # 数值检查
         if torch.isnan(aggregate_mu).any():
             print('警告: 融合均值中存在NaN')
+            aggregate_mu = torch.nan_to_num(aggregate_mu, nan=0.0)
         
-        return aggregate_mu, aggregate_sca
+        if torch.isnan(aggregate_var).any():
+            print('警告: 融合方差中存在NaN')
+            aggregate_var = torch.nan_to_num(aggregate_var, nan=eps)
+        
+        if torch.isinf(aggregate_var).any():
+            print('警告: 融合方差中存在Inf')
+            aggregate_var = torch.clamp(aggregate_var, min=eps, max=1e6)
+        
+        # 直接返回 [N, D] 形状的结果，不需要 squeeze
+        return aggregate_mu, aggregate_var
 
     def moe_aggregate(self, mu, var, mask=None, eps=1e-5):
         if mask is None:
@@ -495,13 +494,13 @@ class VAE(nn.Module):
         # 这一项是对应解耦文章的最后优化问题的I(x_s,y_s) 
         I_mutual_s = 0
         # 遍历所有可能的视图对(i,j)，其中i≠j
-        for i in range(self.num_views):
-            for j in range(self.num_views):
-                if i != j:  # 不计算自身与自身的互信息
-                    # 使用第i个视图的共享表示和第j个视图的私有表示计算互信息
-                    mi_value1 = self.mi_estimator[i](z_sample_list_s[i], z_sample_list_s[j])
-                    mi_value2 = self.mi_estimator[j](z_sample_list_s[j], z_sample_list_s[i])
-                    I_mutual_s += mi_value1.mean() + mi_value2.mean()
+        # for i in range(self.num_views):
+        #     for j in range(self.num_views):
+        #         if i != j:  # 不计算自身与自身的互信息
+        #             # 使用第i个视图的共享表示和第j个视图的私有表示计算互信息
+        #             mi_value1 = self.mi_estimator[i](z_sample_list_s[i], z_sample_list_s[j])
+        #             mi_value2 = self.mi_estimator[j](z_sample_list_s[j], z_sample_list_s[i])
+        #             I_mutual_s += mi_value1.mean() + mi_value2.mean()
 
         pos_I_y_zxp_mean = 0
         # 这一项是对应解耦文章的最后优化问题的I(x_p,y_p) 
