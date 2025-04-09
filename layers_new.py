@@ -237,7 +237,7 @@ class FDModel(nn.Module):
         nn.init.kaiming_uniform_(self.NN2.weight, nonlinearity='sigmoid')
         nn.init.constant_(self.NN2.bias, 0.0)
 
-    def forward(self, x, y, mask=None):
+    def forward(self, x, y, mask=None, mode = None):
         x_processed = []
         # 利用MLP提取多视图的嵌入特征 X -> Z
         # 输入的x是data[]，一个长为6（view的个数）列表，其中的元素是已经经过掩码处理过的输入数据（也是列表）
@@ -287,4 +287,27 @@ class FDModel(nn.Module):
             x_new_i = self.MLP_list2[i](new_x[i])
             x_new_processed.append(x_new_i)
         x_new_processed = [torch.nan_to_num(x, nan=0.0) for x in x_new_processed]
+
+        if mode == 'train':
+            # 创建输入数据的副本，避免修改原始数据
+            masked_input = []
+            prop = 0.15  # 掩码比例，可以根据需要调整
+            
+            for X in x_new_processed:
+                # 计算要掩码的长度
+                mask_len = int(prop * X.size(-1))
+                # 为每个样本生成随机起始位置
+                st = torch.randint(low=0, high=X.size(-1)-mask_len-1, size=(X.size(0),)).to(X.device)
+                # 创建掩码张量
+                random_mask = torch.ones_like(X).to(X.device)
+                # 应用掩码
+                for j in range(X.size(0)):
+                    random_mask[j, st[j]:st[j]+mask_len] = 0
+                # 应用掩码到数据
+                masked_X = X * random_mask
+                masked_input.append(masked_X)
+            
+            # 使用掩码后的数据
+            x_new_processed = masked_input
+
         return  new_x, x_new_processed, y_n

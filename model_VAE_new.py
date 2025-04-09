@@ -6,15 +6,6 @@ import torch.nn.functional as F
 from torch.nn.functional import softplus
 
 def gaussian_reparameterization_var(means, var, times=1):
-    # 检查并处理输入
-    if torch.isnan(means).any():
-        print("警告: means中包含NaN")
-        means = torch.nan_to_num(means, nan=0.0)
-    
-    if torch.isnan(var).any():
-        print("警告: var中包含NaN")
-        var = torch.nan_to_num(var, nan=1e-6)
-    
     # 确保方差为正值
     var = torch.clamp(var, min=1e-6)
     
@@ -26,11 +17,6 @@ def gaussian_reparameterization_var(means, var, times=1):
     for t in range(times):
         epi = std.data.new(std.size()).normal_()
         res += epi * std + means
-    
-    # 最终检查
-    if torch.isnan(res).any():
-        print("警告: 重参数化结果中包含NaN")
-        res = torch.nan_to_num(res, nan=0.0)
     
     return res/times
 
@@ -45,18 +31,6 @@ def manual_gaussian_log_prob_stable(x, mu, var, eps=1e-8):
     Returns:
         log_prob: 对数概率 [batch_size]
     """
-    # 检查和处理输入以避免NaN
-    if torch.isnan(x).any():
-        print("警告: x中包含NaN")
-        x = torch.nan_to_num(x, nan=0.0)
-    
-    if torch.isnan(mu).any():
-        print("警告: mu中包含NaN")
-        mu = torch.nan_to_num(mu, nan=0.0)
-    
-    if torch.isnan(var).any():
-        print("警告: var中包含NaN")
-        var = torch.nan_to_num(var, nan=eps)
     
     # 确保方差为正值
     var = torch.clamp(var, min=eps)
@@ -79,15 +53,15 @@ def manual_gaussian_log_prob_stable(x, mu, var, eps=1e-8):
     log_prob_per_dim = const + log_det + mahalanobis
     
     # 检查是否有无穷值或NaN
-    if torch.isnan(log_prob_per_dim).any() or torch.isinf(log_prob_per_dim).any():
-        print("警告: 对数概率计算中出现NaN或Inf")
-        log_prob_per_dim = torch.nan_to_num(log_prob_per_dim, nan=0.0, posinf=0.0, neginf=0.0)
+    # if torch.isnan(log_prob_per_dim).any() or torch.isinf(log_prob_per_dim).any():
+    #     print("警告: 对数概率计算中出现NaN或Inf")
+    #     log_prob_per_dim = torch.nan_to_num(log_prob_per_dim, nan=0.0, posinf=0.0, neginf=0.0)
     
     # 在求和前检查数值范围，避免极端值
     log_prob_per_dim = torch.clamp(log_prob_per_dim, min=-100, max=100)
     
     # 独立多维高斯分布的对数概率是各维度对数概率之和
-    log_prob = torch.sum(log_prob_per_dim, dim=-1)
+    log_prob = torch.sum(log_prob_per_dim, dim=-1) / 512
     
     # 最终检查
     if torch.isnan(log_prob).any():
@@ -192,7 +166,6 @@ class MIEstimator(nn.Module):
             nn.Linear(1024, 1024),
             nn.ReLU(True),
             nn.Linear(1024, 1),
-            nn.Tanh(),
         )
 
     # Gradient for JSD mutual information estimation and EB-based estimation
@@ -297,7 +270,7 @@ class VAE(nn.Module):
             total_elements = x_list[v].numel()
             
             if zero_count > 0:
-                print(f"视图 {v} 中有 {zero_count} 个零值 (占比 {zero_count/total_elements*100:.2f}%)")
+
                 
                 # 选项1: 为所有0值添加小噪声
                 noise = torch.randn_like(x_list[v]) * 1e-4
@@ -329,10 +302,10 @@ class VAE(nn.Module):
             z_mu_v_s, z_sca_v_s = self.qz_inference_header(fea_s)
             z_mu_v_p, z_sca_v_p = self.qz_inference_header(fea_p)
             
-            # 检查并处理方差
-            z_sca_v = torch.clamp(z_sca_v, min=1e-6)  # 确保方差为正值
-            z_sca_v_s = torch.clamp(z_sca_v_s, min=1e-6)
-            z_sca_v_p = torch.clamp(z_sca_v_p, min=1e-6)
+            # # 检查并处理方差
+            # z_sca_v = torch.clamp(z_sca_v, min=1e-6)  # 确保方差为正值
+            # z_sca_v_s = torch.clamp(z_sca_v_s, min=1e-6)
+            # z_sca_v_p = torch.clamp(z_sca_v_p, min=1e-6)
             
             # 检查并处理均值
             if torch.isnan(z_mu_v).any():
@@ -494,15 +467,15 @@ class VAE(nn.Module):
         # 这一项是对应解耦文章的最后优化问题的I(x_s,y_s) 
         I_mutual_s = 0
         # 遍历所有可能的视图对(i,j)，其中i≠j
-        # for i in range(self.num_views):
-        #     for j in range(self.num_views):
-        #         if i != j:  # 不计算自身与自身的互信息
-        #             # 使用第i个视图的共享表示和第j个视图的私有表示计算互信息
-        #             mi_value1 = self.mi_estimator[i](z_sample_list_s[i], z_sample_list_s[j])
-        #             mi_value2 = self.mi_estimator[j](z_sample_list_s[j], z_sample_list_s[i])
-        #             I_mutual_s += mi_value1.mean() + mi_value2.mean()
-
+        for i in range(self.num_views):
+            for j in range(self.num_views):
+                if i != j:  # 不计算自身与自身的互信息
+                    # 使用第i个视图的共享表示和第j个视图的私有表示计算互信息
+                    mi_value1 = self.mi_estimator[i](z_sample_list_s[i], z_sample_list_s[j])
+                    I_mutual_s += mi_value1.mean()
+        I_mutual_s = I_mutual_s / (self.num_views*(self.num_views-1))
         pos_I_y_zxp_mean = 0
+
         # 这一项是对应解耦文章的最后优化问题的I(x_p,y_p) 
         # 遍历所有可能的视图对(i,j)，其中i≠j
         # for i in range(self.num_views):
@@ -522,32 +495,34 @@ class VAE(nn.Module):
         #             # 计算视图i的私有表示与视图j的先验之间的互信息
         #             pos_I_y_zxp = i_log_prob - j_prior_log_prob
         #             pos_I_y_zxp_mean += pos_I_y_zxp
+
+
         # 遍历所有可能的视图对(i,j)，其中i≠j
-        # for i in range(self.num_views):
-        #     # 为视图i创建私有表示的对数概率
-        #     sca_p_positive_i = F.softplus(sca_p_list[i]) + 1e-6
+        for i in range(self.num_views):
+            # 为视图i创建私有表示的对数概率
+            sca_p_positive_i = F.softplus(sca_p_list[i]) + 1e-6
             
-        #     # 手动计算视图i的私有表示的对数概率
-        #     i_log_prob = manual_gaussian_log_prob_stable(
-        #         z_sample_list_p[i], 
-        #         mu_p_list[i], 
-        #         sca_p_positive_i
-        #     ).mean()
+            # 手动计算视图i的私有表示的对数概率
+            i_log_prob = manual_gaussian_log_prob_stable(
+                z_sample_list_p[i], 
+                mu_p_list[i], 
+                sca_p_positive_i
+            ).mean()
             
-        #     for j in range(self.num_views):
-        #         if i != j:  # 不计算自身与自身的互信息
-        #             # 计算视图j的先验对数概率（使用标准正态分布）
-        #             j_prior_log_prob = manual_gaussian_log_prob_stable(
-        #                 z_sample_list_p[j], 
-        #                 self.mu2.expand_as(z_sample_list_p[j]), 
-        #                 self.sigma.expand_as(z_sample_list_p[j]) ** 2
-        #             ).mean()
+            for j in range(self.num_views):
+                if i != j:  # 不计算自身与自身的互信息
+                    # 计算视图j的先验对数概率（使用标准正态分布）
+                    j_prior_log_prob = manual_gaussian_log_prob_stable(
+                        z_sample_list_p[j], 
+                        self.mu2.expand_as(z_sample_list_p[j]), 
+                        self.sigma.expand_as(z_sample_list_p[j]) ** 2
+                    ).mean()
                     
-        #             # 计算视图i的私有表示与视图j的先验之间的互信息
-        #             pos_I_y_zxp = i_log_prob - j_prior_log_prob
-        #             pos_I_y_zxp_mean += pos_I_y_zxp
+                    # 计算视图i的私有表示与视图j的先验之间的互信息
+                    pos_I_y_zxp = i_log_prob - j_prior_log_prob
+                    pos_I_y_zxp_mean += pos_I_y_zxp
         
         # 总互信息损失
-        pos_beta_I = pos_I_y_zxp_mean 
+        pos_beta_I = pos_I_y_zxp_mean / (self.num_views*(self.num_views-1))
         
         return uniview_mu_list, uniview_sca_list,  xr_s_list, xr_p_list, pos_beta_I, I_mutual_s, z_sample_list_s, z_sample_list_p, mu_s_list, mu_p_list, sca_s_list, sca_p_list

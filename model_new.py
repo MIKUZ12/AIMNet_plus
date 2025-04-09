@@ -154,7 +154,7 @@ class Net(nn.Module):
         # VAE module
         self.VAE = VAE(d_list=self.d_list,z_dim=self.z_dim,class_num=self.num_classes)
 
-        
+        self.batchnorm = nn.BatchNorm1d(z_dim)
         # Classifier
         self.cls_conv = nn.Conv1d(num_classes, num_classes,
                                   512, groups=num_classes)
@@ -194,8 +194,9 @@ class Net(nn.Module):
         return [{'params': self.FD_model.parameters()},
                 {'params': self.cls_conv.parameters()}]
 
-    def forward(self, input, mask, inc_L_ind):
+    def forward(self, input, mask, inc_L_ind, mode):
         # Generating semantic label embeddings via label semantic encoding module
+
         # 利用图注意机制计算multi-head output features
         # 对应论文Multi-label Semantic Representation Learning的部分，根据初始的标签邻接矩阵计算出一个标签的嵌入
         # 其中label_embedding features是可以学习的，注意力系数计算中的W，a都是可以学习的参数
@@ -204,7 +205,7 @@ class Net(nn.Module):
         label_embedding = self.GAT_encoder(label_embedding_vae, self.adj)
         # 对应论文Attention-Induced Missing View Imputation的部分
         ## 返回值Z对应论文中的公式8返回值：B_i
-        x_new, x_new_processed, y_n = self.FD_model(input, label_embedding, mask)  #Z[i]=[128, 260, 512] b c d_e
+        x_new, x_new_processed, y_n = self.FD_model(input, label_embedding, mask, mode)  #Z[i]=[128, 260, 512] b c d_e
         # 将标签的vae嵌入label_embedding_u（初始化为一个大小为num_classes*num_classes的对角矩阵）输入进变分推断的encoder，得到高斯分布的均值和幅度sca
         label_embedding_mu, label_embedding_var = self.label_mlp(label_embedding_vae)
         label_embedding_mu = self.GAT_encoder_vae(label_embedding_mu, self.adj)
@@ -278,7 +279,9 @@ class Net(nn.Module):
         # 分别将共享s，和私有p的流形损失求和再平均
         loss_manifold_s_avg = loss_manifold_s.mean()
         loss_manifold_p_avg = loss_manifold_p.mean()
+        fusion_fea = self.batchnorm(fusion_fea)
         Z = fusion_fea.clone().unsqueeze(1) * y_n.clone().unsqueeze(0)
+        # 对Z进行batchnorm
         pred = self.cls_conv(Z)
         pred = pred.sigmoid().squeeze(2)
         return pred, xr_s_list, xr_p_list, pos_beat_I, p_vae_s_list, p_vae_p_list, I_mutual_s, loss_manifold_s_avg, loss_manifold_p_avg

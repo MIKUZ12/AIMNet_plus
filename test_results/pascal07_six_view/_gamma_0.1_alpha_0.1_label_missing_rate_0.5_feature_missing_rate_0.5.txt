@@ -1,0 +1,20 @@
+============================ Summary Board ============================
+>>>>>>>> Experimental Setup:
+>>>>>>>> Dataset Info:
+Dataset name: pascal07_six_view
+>>>>>>>> Experiment Results:
+Test1:  Accuracy:0.9314 | one_error:0.4385| coverage:0.7674 | ranking_loss:0.8196| Precision:0.5261 | AUC:0.8427 | F1:0.0301 | 
+Test2:  Accuracy:0.9306 | one_error:0.4611| coverage:0.7666 | ranking_loss:0.8193| Precision:0.5390 | AUC:0.8399 | F1:0.0321 | 
+Test3:  Accuracy:0.9320 | one_error:0.4511| coverage:0.7722 | ranking_loss:0.8211| Precision:0.5308 | AUC:0.8443 | F1:0.0453 | 
+>>>>>>>> Mean Score (standard deviation):
+Accuracy: 0.9313 (0.0006)
+one_error: 0.4502 (0.0092)
+coverage: 0.7687 (0.0025)
+ranking_loss: 0.8200 (0.0008)
+Precision: 0.5319 (0.0053)
+AUC: 0.8423 (0.0018)
+F1: 0.0359 (0.0067)
+>>>>>>>> Mean Training Time (standard deviation)(s):325.1499 (8.0728)
+0: 336.564222574234
+1: 319.6432592868805
+2: 319.24218821525574

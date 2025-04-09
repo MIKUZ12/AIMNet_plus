@@ -32,8 +32,10 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
     model.train()
     end = time.time()
     cont = 0
-    lambda_scheduler = ExponentialScheduler(start_value=1e-8, end_value=0.001,
-                                                   n_iterations=10000, start_iteration=5000)
+    lambda_scheduler = ExponentialScheduler(start_value=1e-8, end_value=0.01,
+                                                   n_iterations=10000, start_iteration=5)
+    lambda_scheduler2 = ExponentialScheduler(start_value=0.01, end_value=0.001,
+                                                   n_iterations=10000, start_iteration=10)
     for i, (data, label, inc_V_ind, inc_L_ind) in enumerate(loader):
         data_time.update(time.time() - end)
         data = [v_data.to('cuda:0') for v_data in data]
@@ -45,8 +47,9 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         L_all = []
         # pred, label_embedding,  p_pre = model(data,mask=torch.ones_like(inc_V_ind))
         (pred, xr_s_list, xr_p_list, pos_beat_I, 
-        p_vae_s_list, p_vae_p_list, I_mutual_s, loss_manifold_s_avg, loss_manifold_p_avg) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
+        p_vae_s_list, p_vae_p_list, I_mutual_s, loss_manifold_s_avg, loss_manifold_p_avg) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind, mode='train')
         lambda_val = lambda_scheduler(epoch)
+        lambda_val2 = lambda_scheduler2(epoch)
         loss_vae_s = 0
         loss_vae_p = 0
         loss_recon_s = 0
@@ -61,7 +64,14 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         # 使用weighted_BCE_loss + label_guided_graph_loss作为损失，使用加权的多label分类loss，输入的值有label的掩码
         loss_CL = loss_model.weighted_BCE_loss(pred, label, inc_L_ind)
         # 这里的输入是：补全之后的多视图特征，形状是(6,128,512),label (128, 20)
-        loss = loss_CL  + loss_vae_s + loss_vae_p  + loss_recon_s + loss_recon_p + pos_beat_I + lambda_val*I_mutual_s + loss_manifold_s_avg + loss_manifold_p_avg
+        # loss = loss_CL  + loss_vae_s + loss_vae_p  + loss_recon_s + loss_recon_p + pos_beat_I - I_mutual_s + loss_manifold_s_avg + loss_manifold_p_avg
+        loss = 0.05 * loss_CL + 0.3*loss_recon_p + 0.3*loss_recon_s + 0.05*loss_vae_s + 0.05*loss_vae_p + I_mutual_s*0.005 + pos_beat_I*0.01
+        if(i % 20 == 0):
+            # 打印出每一个loss的值,只打印前4位
+            print(f"loss_CL: {loss_CL.item():.4f}, loss_recon_p: {loss_recon_p.item():.4f}, "
+                f"loss_recon_s: {loss_recon_s.item():.4f}, loss_manifold_p_avg: {loss_manifold_p_avg.item():.4f}, "
+                f"loss_manifold_s_avg: {loss_manifold_s_avg.item():.4f}, pos_beat_I: {pos_beat_I.item():.4f}, "
+                f"I_mutual_s: {I_mutual_s.item():.4f}, loss_vae_s: {loss_vae_s.item():.4f}, loss_vae_p: {loss_vae_p.item():.4f}")
         opt.zero_grad()
         
         loss.backward()
@@ -96,7 +106,7 @@ def test(loader, model, loss_model, epoch, logger):
         data = [v_data.to('cuda:0') for v_data in data]
         # pred,_,_ = model(data,mask=torch.ones_like(inc_V_ind).to('cuda:0'))
         (pred, xr_s_list, xr_p_list, pos_beat_I, 
-        p_vae_s_list, p_vae_p_list, I_mutual_s, loss_manifold_s_avg, loss_manifold_p_avg) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind)
+        p_vae_s_list, p_vae_p_list, I_mutual_s, loss_manifold_s_avg, loss_manifold_p_avg) = model(data, mask=inc_V_ind, inc_L_ind=inc_L_ind, mode='test')
         pred = pred.cpu()
         total_labels = np.concatenate((total_labels, label.numpy()), axis=0) if len(total_labels) > 0 else label.numpy()
         total_preds = np.concatenate((total_preds, pred.detach().numpy()), axis=0) if len(
@@ -216,7 +226,6 @@ def main(args, file_path):
                     dep_graph[dep_graph <= args.sigma] = 0.
                     dep_graph.fill_diagonal_(fill_value=0.) # 对角线元素置0
                     start = time.time()
-                    ## 这里需要修改
                     model = get_model(d_list, num_classes=classes_num, beta=args.beta, in_layers=1, class_emb=512,
                                       adj=dep_graph, rand_seed=0)
                     # print(model)
