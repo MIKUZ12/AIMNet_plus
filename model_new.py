@@ -205,7 +205,7 @@ class Net(nn.Module):
         label_embedding = self.GAT_encoder(label_embedding_vae, self.adj)
         # 对应论文Attention-Induced Missing View Imputation的部分
         ## 返回值Z对应论文中的公式8返回值：B_i
-        x_new, x_new_processed, y_n = self.FD_model(input, label_embedding, mask, mode)  #Z[i]=[128, 260, 512] b c d_e
+        x_new_processed, y_n = self.FD_model(input, label_embedding, mask, mode)  #Z[i]=[128, 260, 512] b c d_e
         # 将标签的vae嵌入label_embedding_u（初始化为一个大小为num_classes*num_classes的对角矩阵）输入进变分推断的encoder，得到高斯分布的均值和幅度sca
         label_embedding_mu, label_embedding_var = self.label_mlp(label_embedding_vae)
         label_embedding_mu = self.GAT_encoder_vae(label_embedding_mu, self.adj)

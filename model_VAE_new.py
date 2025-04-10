@@ -474,6 +474,7 @@ class VAE(nn.Module):
                     mi_value1 = self.mi_estimator[i](z_sample_list_s[i], z_sample_list_s[j])
                     I_mutual_s += mi_value1.mean()
         I_mutual_s = I_mutual_s / (self.num_views*(self.num_views-1))
+        I_mutual_s = torch.clamp(I_mutual_s, min=-15.0)
         pos_I_y_zxp_mean = 0
 
         # 这一项是对应解耦文章的最后优化问题的I(x_p,y_p) 

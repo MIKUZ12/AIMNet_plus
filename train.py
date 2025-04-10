@@ -65,7 +65,7 @@ def train(loader, model, loss_model, opt, sche, epoch, dep_graph, logger):
         loss_CL = loss_model.weighted_BCE_loss(pred, label, inc_L_ind)
         # 这里的输入是：补全之后的多视图特征，形状是(6,128,512),label (128, 20)
         # loss = loss_CL  + loss_vae_s + loss_vae_p  + loss_recon_s + loss_recon_p + pos_beat_I - I_mutual_s + loss_manifold_s_avg + loss_manifold_p_avg
-        loss = 0.05 * loss_CL + 0.3*loss_recon_p + 0.3*loss_recon_s + 0.05*loss_vae_s + 0.05*loss_vae_p + I_mutual_s*0.005 + pos_beat_I*0.01
+        loss = 0.06 * loss_CL + 0.3*loss_recon_p + 0.3*loss_recon_s + 0.1*loss_vae_s + 0.1*loss_vae_p + I_mutual_s*0.001 + pos_beat_I*0.03
         if(i % 20 == 0):
             # 打印出每一个loss的值,只打印前4位
             print(f"loss_CL: {loss_CL.item():.4f}, loss_recon_p: {loss_recon_p.item():.4f}, "
